@@ -81,7 +81,7 @@
             單字駐留 6 秒，且敵人丟擲頻率降低！<br>
             每 10 秒出現補給星星，碰到可增加一格能量！<br>
             躲在橫桿下防禦拋丟物，挑戰登頂！<br>
-            進度達 40% 會下大雪，請在 65 秒內爬到 70%！<br>
+            進度達 40% 會下大雪，請在 70 秒內爬到 70%！<br>
             結冰時仍要躲開窗戶丟出的水果！<br>
             寒冰會從腳蔓延到全身，完全凍結就會墜落！
         </p>
@@ -103,7 +103,7 @@
     const overlay = document.getElementById('overlay');
     const startBtn = document.getElementById('start-btn');
     const weatherStatusEl = document.getElementById('weather-status');
-    const freezeDelay = 65;
+    const freezeDelay = 70;
     const fruitTypes = ['🍎', '🍊', '🍋', '🍐', '🍑', '🍌'];
     let snowflakes = [];
     let coldSeconds = 0;
@@ -190,7 +190,11 @@
     // 手機滑動變數
     let touchStartX = 0;
     let touchStartY = 0;
-    const swipeThreshold = 30;
+    const swipeThreshold = 6;
+    const swipeRange = 48;
+    const touchDirection = { x: 0, y: 0 };
+    const movement = { x: 0, y: 0 };
+    let activeTouchId = null;
 
     function init() {
         resize();
@@ -200,12 +204,15 @@
         container.addEventListener('touchstart', handleTouchStart, { passive: false });
         container.addEventListener('touchmove', handleTouchMove, { passive: false });
         container.addEventListener('touchend', handleTouchEnd, { passive: false });
+        container.addEventListener('touchcancel', handleTouchEnd, { passive: false });
 
         resetGame();
     }
 
     function handleTouchStart(e) {
-        if (!isGameRunning) return;
+        if (!isGameRunning || isFalling || activeTouchId !== null) return;
+        e.preventDefault();
+        activeTouchId = e.touches[0].identifier;
         touchStartX = e.touches[0].clientX;
         touchStartY = e.touches[0].clientY;
     }
@@ -214,26 +221,29 @@
         if (!isGameRunning || isFalling) return;
         e.preventDefault(); 
 
-        const currentX = e.touches[0].clientX;
-        const currentY = e.touches[0].clientY;
+        const touch = Array.from(e.touches).find(t => t.identifier === activeTouchId);
+        if (!touch) return;
+        const currentX = touch.clientX;
+        const currentY = touch.clientY;
         const dx = currentX - touchStartX;
         const dy = currentY - touchStartY;
 
-        keys['ArrowUp'] = false;
-        keys['ArrowDown'] = false;
-        keys['ArrowLeft'] = false;
-        keys['ArrowRight'] = false;
-
-        if (Math.abs(dy) > Math.abs(dx)) {
-            if (dy < -swipeThreshold) keys['ArrowUp'] = true;
-            else if (dy > swipeThreshold) keys['ArrowDown'] = true;
-        } else {
-            if (dx < -swipeThreshold) keys['ArrowLeft'] = true;
-            else if (dx > swipeThreshold) keys['ArrowRight'] = true;
+        const distance = Math.hypot(dx, dy);
+        const strength = Math.min(1, Math.max(0, (distance - swipeThreshold) / (swipeRange - swipeThreshold)));
+        touchDirection.x = distance ? dx / distance * strength : 0;
+        touchDirection.y = distance ? -dy / distance * strength : 0;
+        // Follow long swipes so reversing direction needs only a short movement.
+        if (distance > swipeRange) {
+            touchStartX = currentX - dx / distance * swipeRange;
+            touchStartY = currentY - dy / distance * swipeRange;
         }
     }
 
-    function handleTouchEnd() {
+    function handleTouchEnd(e) {
+        if (e && Array.from(e.touches).some(t => t.identifier === activeTouchId)) return;
+        activeTouchId = null;
+        touchDirection.x = touchDirection.y = 0;
+        movement.x = movement.y = 0;
         keys['ArrowUp'] = false;
         keys['ArrowDown'] = false;
         keys['ArrowLeft'] = false;
@@ -395,31 +405,27 @@
             return;
         }
 
-        const isUp = keys['ArrowUp'] || keys['w'];
-        const isDown = keys['ArrowDown'] || keys['s'];
+        const frameStep = Math.min(dt, 0.05) * 60;
+        const inputX = activeTouchId !== null ? touchDirection.x
+            : Number(!!(keys['ArrowRight'] || keys['d'])) - Number(!!(keys['ArrowLeft'] || keys['a']));
+        const inputY = activeTouchId !== null ? touchDirection.y
+            : Number(!!(keys['ArrowUp'] || keys['w'])) - Number(!!(keys['ArrowDown'] || keys['s']));
+        const smoothing = 1 - Math.exp(-Math.min(dt, 0.05) * 24);
+        movement.x += (inputX - movement.x) * smoothing;
+        movement.y += (inputY - movement.y) * smoothing;
+        const previousWorldY = worldY;
+        worldY = Math.max(0, worldY + movement.y * player.climbSpeed * frameStep);
+        const scrollDelta = worldY - previousWorldY;
         const p = score / totalQuestions;
 
-        if (isUp) {
-            worldY += player.climbSpeed;
-        } else if (isDown && worldY > 0) {
-            worldY -= player.climbSpeed;
-        }
-
-        if (keys['ArrowLeft'] || keys['a']) {
-            player.facing = 'left';
-            player.x -= player.sideSpeed;
-        }
-        if (keys['ArrowRight'] || keys['d']) {
-            player.facing = 'right';
-            player.x += player.sideSpeed;
-        }
+        if (Math.abs(movement.x) > 0.01) player.facing = movement.x < 0 ? 'left' : 'right';
+        player.x += movement.x * player.sideSpeed * frameStep;
         constrainPlayerToBuilding();
 
         updateSupplies(dt);
 
         clouds.forEach(c => {
-            if (isUp) c.y += player.climbSpeed;
-            if (isDown && worldY > 0) c.y -= player.climbSpeed;
+            c.y += scrollDelta;
             if (c.y > height) { c.y = -100; c.x = Math.random() * width; }
             if (c.y < -100) { c.y = height; c.x = Math.random() * width; }
         });
@@ -467,7 +473,7 @@
             });
         }
 
-        const moving = isUp || isDown || keys['ArrowLeft'] || keys['a'] || keys['ArrowRight'] || keys['d'];
+        const moving = Math.abs(movement.x) > 0.01 || Math.abs(movement.y) > 0.01;
         player.visualOffsetX = moving ? Math.sin(now / 80) * 4 : 0;
         constrainPlayerToBuilding();
 
@@ -515,8 +521,7 @@
         obstacles.forEach((ob, i) => {
             const prevY = ob.y;
             ob.x += ob.vx; ob.y += ob.vy;
-            if (isUp) ob.y += player.climbSpeed;
-            if (isDown && worldY > 0) ob.y -= player.climbSpeed;
+            ob.y += scrollDelta;
 
             let blocked = false;
             windowEntities.forEach(win => {
@@ -870,12 +875,13 @@
         document.getElementById('retry-btn').onclick = () => location.reload();
         if (isFrozen) {
             overlay.querySelector('h1').textContent = '🧊 被凍結了！';
-            overlay.querySelector('p').textContent = '未能在 65 秒內從 40% 爬到 70%，寒冰蔓延全身，失去抓握後墜落了！';
+            overlay.querySelector('p').textContent = '未能在 70 秒內從 40% 爬到 70%，寒冰蔓延全身，失去抓握後墜落了！';
         }
     }
 
     startBtn.addEventListener('click', () => { overlay.style.display = 'none'; isGameRunning = true; resetGame(); draw(); });
     window.addEventListener('resize', resize);
+    window.addEventListener('blur', () => { lastUpdateTime = null; handleTouchEnd(); });
     document.addEventListener('visibilitychange', () => {
         lastUpdateTime = null;
         handleTouchEnd();
