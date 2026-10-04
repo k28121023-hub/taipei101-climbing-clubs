@@ -325,7 +325,7 @@
 
     function updateUI() {
         if (!isFalling) constrainPlayerToBuilding();
-        livesEl.innerText = lives > 4 ? `❤️ × ${lives}` : "❤️ ".repeat(lives);
+        livesEl.innerText = "❤️ ".repeat(lives);
         const percent = Math.min(100, Math.floor((score / totalQuestions) * 100));
         progressTextEl.innerText = `${percent}%`;
         progressBarEl.style.width = `${percent}%`;
@@ -560,7 +560,7 @@
             const screenY = star.y + worldY;
             if (star.remaining <= 0 || screenY > height + star.h) return false;
             if (playerTouchesWord(star, screenY)) {
-                lives++;
+                lives = Math.min(4, lives + 1);
                 updateUI();
                 return false;
             }
