@@ -79,6 +79,7 @@
         <p class="mb-6 text-center px-8 text-gray-600 font-medium">
             手機操作：可在螢幕上<span class="text-blue-500">滑動</span>控制方向。<br>
             單字駐留 6 秒，且敵人丟擲頻率降低！<br>
+            每 10 秒出現補給星星，碰到可增加一格能量！<br>
             躲在橫桿下防禦拋丟物，挑戰登頂！<br>
             進度達 40% 會下大雪，請在 65 秒內爬到 70%！<br>
             結冰時仍要躲開窗戶丟出的水果！<br>
@@ -111,6 +112,8 @@
     let frostAmount = 0;
     let isFrozen = false;
     let lastUpdateTime = null;
+    let supplySeconds = 0;
+    let supplyStars = [];
     const frostCanvas = document.createElement('canvas');
     frostCanvas.width = frostCanvas.height = 160;
     const frostCtx = frostCanvas.getContext('2d');
@@ -277,6 +280,8 @@
         frostAmount = 0;
         isFrozen = false;
         lastUpdateTime = null;
+        supplySeconds = 0;
+        supplyStars = [];
         weatherStatusEl.hidden = true;
         handleTouchEnd();
         snowflakes = Array.from({length: 180}, () => ({
@@ -320,7 +325,7 @@
 
     function updateUI() {
         if (!isFalling) constrainPlayerToBuilding();
-        livesEl.innerText = "❤️ ".repeat(lives);
+        livesEl.innerText = lives > 4 ? `❤️ × ${lives}` : "❤️ ".repeat(lives);
         const percent = Math.min(100, Math.floor((score / totalQuestions) * 100));
         progressTextEl.innerText = `${percent}%`;
         progressBarEl.style.width = `${percent}%`;
@@ -409,6 +414,8 @@
             player.x += player.sideSpeed;
         }
         constrainPlayerToBuilding();
+
+        updateSupplies(dt);
 
         clouds.forEach(c => {
             if (isUp) c.y += player.climbSpeed;
@@ -529,6 +536,35 @@
                 if (lives <= 0) isFalling = true;
             }
             if (ob.y > height + 200 || ob.x < -200 || ob.x > width + 200) obstacles.splice(i, 1);
+        });
+    }
+
+    function updateSupplies(dt) {
+        supplyStars.forEach(star => { star.remaining -= dt; });
+        supplySeconds += dt;
+        if (supplySeconds >= 10) {
+            supplySeconds %= 10;
+            const bounds = getPlayerHorizontalBounds();
+            const size = 36;
+            const minX = Math.max(8, bounds.min + player.w / 2 - size / 2);
+            const maxX = Math.min(width - size - 8, bounds.max + player.w / 2 - size / 2);
+            const minY = Math.min(150, height * 0.25);
+            const maxY = Math.max(minY, player.y - size - 20);
+            supplyStars.push({
+                x: minX + Math.random() * Math.max(0, maxX - minX),
+                y: minY + Math.random() * (maxY - minY) - worldY,
+                w: size, h: size, scale: 1, remaining: 10
+            });
+        }
+        supplyStars = supplyStars.filter(star => {
+            const screenY = star.y + worldY;
+            if (star.remaining <= 0 || screenY > height + star.h) return false;
+            if (playerTouchesWord(star, screenY)) {
+                lives++;
+                updateUI();
+                return false;
+            }
+            return true;
         });
     }
 
@@ -761,6 +797,17 @@
                 ctx.fillText(word.text, word.x + word.w/2, sy + 25);
                 ctx.restore();
             }
+        });
+
+        supplyStars.forEach(star => {
+            ctx.save();
+            ctx.font = '32px Arial';
+            ctx.textAlign = 'center';
+            ctx.textBaseline = 'middle';
+            ctx.shadowColor = '#facc15';
+            ctx.shadowBlur = 12;
+            ctx.fillText('⭐', star.x + star.w / 2, star.y + worldY + star.h / 2);
+            ctx.restore();
         });
 
         obstacles.forEach(ob => { ctx.font = "35px Arial"; ctx.fillText(ob.type, ob.x, ob.y); });
