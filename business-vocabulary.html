@@ -1,0 +1,892 @@
+<!DOCTYPE html>
+<html lang="zh-TW">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <title>台北 101 攀爬挑戰</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <style>
+        body {
+            margin: 0;
+            overflow: hidden;
+            background-color: #f8fafc;
+            font-family: "Microsoft JhengHei", sans-serif;
+            touch-action: none; /* 禁用瀏覽器預設手勢 */
+        }
+        #game-container {
+            position: relative;
+            width: 100vw;
+            height: 100vh;
+            max-width: 600px;
+            margin: 0 auto;
+            overflow: hidden;
+            border-left: 4px solid #cbd5e1;
+            border-right: 4px solid #cbd5e1;
+        }
+        canvas {
+            display: block;
+        }
+        .ui-panel {
+            position: absolute;
+            top: 10px;
+            right: 10px;
+            background: rgba(255, 255, 255, 0.95);
+            padding: 10px;
+            border-radius: 12px;
+            box-shadow: 0 4px 15px rgba(0,0,0,0.1);
+            z-index: 10;
+        }
+        .health-bar {
+            position: absolute;
+            top: 10px;
+            left: 10px;
+            z-index: 10;
+            font-size: 24px;
+            filter: drop-shadow(0 2px 2px rgba(0,0,0,0.2));
+        }
+        #overlay {
+            position: absolute;
+            inset: 0;
+            background: rgba(255, 255, 255, 0.9);
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+            color: #1e293b;
+            z-index: 100;
+        }
+    </style>
+</head>
+<body>
+
+<div id="game-container">
+    <div class="health-bar" id="lives">❤️ ❤️ ❤️ ❤️</div>
+    <div id="weather-status" role="status" hidden style="position:absolute;top:65px;left:10px;max-width:145px;padding:8px;border-radius:10px;background:rgba(15,23,42,.85);color:#e0f2fe;font-size:13px;z-index:10;pointer-events:none"></div>
+    
+    <div class="ui-panel">
+        <div class="text-xs text-gray-500 font-bold">目標含義</div>
+        <div id="target-word" class="text-2xl font-black text-blue-600">載入中...</div>
+        <div class="mt-2 text-xs text-gray-500">攀爬進度: <span id="progress-text">0%</span></div>
+        <div class="w-full bg-gray-200 h-2 rounded-full mt-1">
+            <div id="progress-bar" class="bg-blue-500 h-2 rounded-full transition-all duration-300" style="width: 0%"></div>
+        </div>
+    </div>
+
+    <canvas id="gameCanvas"></canvas>
+
+    <div id="overlay">
+        <h1 class="text-4xl font-black mb-4 text-blue-600">101 攀爬挑戰</h1>
+        <p class="mb-6 text-center px-8 text-gray-600 font-medium">
+            手機操作：可在螢幕上<span class="text-blue-500">滑動</span>控制方向。<br>
+            單字駐留 6 秒，且敵人丟擲頻率降低！<br>
+            每 10 秒出現補給星星，碰到可增加一格能量！<br>
+            躲在橫桿下防禦拋丟物，挑戰登頂！<br>
+            進度達 40% 會下大雪，請在 70 秒內爬到 70%！<br>
+            結冰時仍要躲開窗戶丟出的水果！<br>
+            寒冰會從腳蔓延到全身，完全凍結就會墜落！
+        </p>
+        <button id="start-btn" class="bg-blue-600 hover:bg-blue-700 text-white font-bold py-3 px-10 rounded-full text-xl transition shadow-xl transform hover:scale-105">
+            開始挑戰
+        </button>
+    </div>
+</div>
+
+<script src="sprite-masks.js"></script>
+<script>
+    const canvas = document.getElementById('gameCanvas');
+    const ctx = canvas.getContext('2d');
+    const container = document.getElementById('game-container');
+    const targetWordEl = document.getElementById('target-word');
+    const progressTextEl = document.getElementById('progress-text');
+    const progressBarEl = document.getElementById('progress-bar');
+    const livesEl = document.getElementById('lives');
+    const overlay = document.getElementById('overlay');
+    const startBtn = document.getElementById('start-btn');
+    const weatherStatusEl = document.getElementById('weather-status');
+    const freezeDelay = 70;
+    const fruitTypes = ['🍎', '🍊', '🍋', '🍐', '🍑', '🍌'];
+    let snowflakes = [];
+    let coldSeconds = 0;
+    let coldStarted = false;
+    let coldEscaped = false;
+    let frostAmount = 0;
+    let isFrozen = false;
+    let lastUpdateTime = null;
+    let supplySeconds = 0;
+    let supplyStars = [];
+    const frostCanvas = document.createElement('canvas');
+    frostCanvas.width = frostCanvas.height = 160;
+    const frostCtx = frostCanvas.getContext('2d');
+    // Fixed texture coordinates keep the ice attached to the body while it moves.
+    const frostCrystals = Array.from({length: 90}, (_, i) => ({
+        x: ((i * 73 + 19) % 157), y: ((i * 47 + 31) % 157),
+        size: 2 + (i % 5), angle: i * 2.399
+    }));
+
+    const assets = {
+        player: new Image(),
+        role2: new Image(), 
+        enemy: new Image()
+    };
+    assets.player.src = "role01-brown.png";
+    assets.role2.src = "role02-brown.png";
+    assets.enemy.src = "";  
+
+    let width, height;
+    let animationId;
+    let isGameRunning = false;
+    let score = 0;
+    const totalQuestions = 36; 
+    let lives = 4; 
+    let worldY = 0;
+    let isFalling = false; 
+    let globalThrowCooldown = 0; 
+
+    // 更新單字資料庫
+    const vocabulary = [
+        { en: "dining suite", zh: "餐桌椅組" },
+        { en: "cartridge", zh: "墨水匣" },
+        { en: "receipt", zh: "發票" },
+        { en: "cable", zh: "纜線" },
+        { en: "whiteboard", zh: "白板" },
+        { en: "put on hold", zh: "被擱置" },
+        { en: "account", zh: "帳戶" },
+        { en: "review", zh: "審視" },
+        { en: "plastic wrapping", zh: "塑膠包膜" },
+        { en: "replacement", zh: "替代" },
+        { en: "scratched", zh: "刮傷的" },
+        { en: "exchange", zh: "交換" },
+        { en: "enclosed", zh: "附上" },
+        { en: "shelf", zh: "架子" },
+        { en: "demonstration", zh: "示範" },
+        { en: "contract", zh: "契約" },
+        { en: "manager", zh: "經理" },
+        { en: "university", zh: "大學" },
+        { en: "parking lot", zh: "停車場" },
+        { en: "purchased", zh: "被購置的" }
+    ];
+
+    let currentTarget = null;
+    let floatingWords = [];
+    let obstacles = [];
+    let clouds = [];
+    let windowEntities = [];
+
+    const player = {
+        x: 0,
+        y: 0,
+        w: 100, 
+        h: 100, 
+        targetX: 0,
+        climbSpeed: 3.5,
+        sideSpeed: 6,
+        facing: 'right',
+        visualOffsetX: 0,
+        fallSpeed: 0
+    };
+
+    const keys = {};
+
+    // 手機滑動變數
+    let touchStartX = 0;
+    let touchStartY = 0;
+    const swipeThreshold = 6;
+    const swipeRange = 48;
+    const touchDirection = { x: 0, y: 0 };
+    const movement = { x: 0, y: 0 };
+    let activeTouchId = null;
+
+    function init() {
+        resize();
+        window.addEventListener('keydown', e => keys[e.key] = true);
+        window.addEventListener('keyup', e => keys[e.key] = false);
+        
+        container.addEventListener('touchstart', handleTouchStart, { passive: false });
+        container.addEventListener('touchmove', handleTouchMove, { passive: false });
+        container.addEventListener('touchend', handleTouchEnd, { passive: false });
+        container.addEventListener('touchcancel', handleTouchEnd, { passive: false });
+
+        resetGame();
+    }
+
+    function handleTouchStart(e) {
+        if (!isGameRunning || isFalling || activeTouchId !== null) return;
+        e.preventDefault();
+        activeTouchId = e.touches[0].identifier;
+        touchStartX = e.touches[0].clientX;
+        touchStartY = e.touches[0].clientY;
+    }
+
+    function handleTouchMove(e) {
+        if (!isGameRunning || isFalling) return;
+        e.preventDefault(); 
+
+        const touch = Array.from(e.touches).find(t => t.identifier === activeTouchId);
+        if (!touch) return;
+        const currentX = touch.clientX;
+        const currentY = touch.clientY;
+        const dx = currentX - touchStartX;
+        const dy = currentY - touchStartY;
+
+        const distance = Math.hypot(dx, dy);
+        const strength = Math.min(1, Math.max(0, (distance - swipeThreshold) / (swipeRange - swipeThreshold)));
+        touchDirection.x = distance ? dx / distance * strength : 0;
+        touchDirection.y = distance ? -dy / distance * strength : 0;
+        // Follow long swipes so reversing direction needs only a short movement.
+        if (distance > swipeRange) {
+            touchStartX = currentX - dx / distance * swipeRange;
+            touchStartY = currentY - dy / distance * swipeRange;
+        }
+    }
+
+    function handleTouchEnd(e) {
+        if (e && Array.from(e.touches).some(t => t.identifier === activeTouchId)) return;
+        activeTouchId = null;
+        touchDirection.x = touchDirection.y = 0;
+        movement.x = movement.y = 0;
+        keys['ArrowUp'] = false;
+        keys['ArrowDown'] = false;
+        keys['ArrowLeft'] = false;
+        keys['ArrowRight'] = false;
+    }
+
+    function resize() {
+        width = container.clientWidth;
+        height = container.clientHeight;
+        canvas.width = width;
+        canvas.height = height;
+        player.x = width / 2 - player.w / 2;
+        player.y = height * 0.75; 
+        player.targetX = player.x;
+        constrainPlayerToBuilding();
+    }
+
+    function getPlayerHorizontalBounds() {
+        const p = score / totalQuestions;
+        const centerX = width / 2;
+        // The lightning rod is narrower than the character: keep it attached centrally.
+        if (p >= 0.8) return { min: centerX - player.w / 2, max: centerX - player.w / 2 };
+        const halfWidth = p >= 0.7 ? 80 : 120;
+        // The climbing position may reach either edge while the body straddles it.
+        return { min: centerX - halfWidth - player.w / 2, max: centerX + halfWidth - player.w / 2 };
+    }
+
+    function constrainPlayerToBuilding() {
+        const bounds = getPlayerHorizontalBounds();
+        player.x = Math.max(bounds.min, Math.min(bounds.max, player.x));
+        player.visualOffsetX = Math.max(bounds.min - player.x,
+            Math.min(bounds.max - player.x, player.visualOffsetX));
+    }
+
+    function resetGame() {
+        score = 0;
+        lives = 4; 
+        worldY = 0;
+        isFalling = false;
+        globalThrowCooldown = 0;
+        coldSeconds = 0;
+        coldStarted = false;
+        coldEscaped = false;
+        frostAmount = 0;
+        isFrozen = false;
+        lastUpdateTime = null;
+        supplySeconds = 0;
+        supplyStars = [];
+        weatherStatusEl.hidden = true;
+        handleTouchEnd();
+        snowflakes = Array.from({length: 180}, () => ({
+            x: Math.random() * width, y: Math.random() * height,
+            radius: 1 + Math.random() * 3,
+            speed: 75 + Math.random() * 150,
+            drift: 25 + Math.random() * 65
+        }));
+        player.fallSpeed = 0;
+        player.facing = 'right';
+        player.visualOffsetX = 0;
+        obstacles = [];
+        floatingWords = [];
+        windowEntities = [];
+        resize();
+        for(let i = -10; i < 60; i++) spawnWindowRow(i * 350);
+        updateUI();
+        nextQuestion();
+        clouds = Array.from({length: 8}, () => ({
+            x: Math.random() * width,
+            y: Math.random() * height,
+            s: 0.3 + Math.random() * 0.5
+        }));
+    }
+
+    function spawnWindowRow(y) {
+        windowEntities.push(createWindow(width/2 - 135, y));
+        windowEntities.push(createWindow(width/2 + 75, y));
+    }
+
+    function createWindow(x, y) {
+        return {
+            x, y, w: 60, h: 80,
+            isOpen: false, personVisible: false,
+            cooldown: 180 + Math.random() * 300,
+            stateTimer: 0,
+            personScale: 0.95,
+            hasBar: Math.random() < 0.35 
+        };
+    }
+
+    function updateUI() {
+        if (!isFalling) constrainPlayerToBuilding();
+        livesEl.innerText = "❤️ ".repeat(lives);
+        const percent = Math.min(100, Math.floor((score / totalQuestions) * 100));
+        progressTextEl.innerText = `${percent}%`;
+        progressBarEl.style.width = `${percent}%`;
+    }
+
+    function nextQuestion() {
+        if (score >= totalQuestions) return;
+        
+        const qIndex = score % vocabulary.length;
+        const correctItem = vocabulary[qIndex];
+        currentTarget = correctItem;
+        targetWordEl.innerText = correctItem.zh;
+
+        const p = score / totalQuestions;
+        const centerX = width / 2;
+
+        let options = [];
+        if (p >= 0.8) {
+            const isCorrect = Math.random() > 0.3; 
+            let displayItem;
+            if (isCorrect) displayItem = correctItem;
+            else displayItem = vocabulary.filter(v => v.en !== correctItem.en).sort(() => Math.random() - 0.5)[0];
+            options = [displayItem];
+        } else {
+            const distractors = vocabulary
+                .filter(v => v.en !== correctItem.en)
+                .sort(() => Math.random() - 0.5)
+                .slice(0, 2);
+            options = [...distractors, correctItem].sort(() => Math.random() - 0.5);
+        }
+
+        ctx.save();
+        ctx.font = "bold 14px 'Microsoft JhengHei'";
+        floatingWords = options.map((item, i) => {
+            const cardWidth = Math.ceil(ctx.measureText(item.en).width) + 24;
+            let spawnX;
+            if (p >= 0.8) spawnX = centerX - 55;
+            else if (p >= 0.7) spawnX = centerX + (i - 1) * 80 - 55;
+            else spawnX = (width / 4) * (i + 1) - 50;
+
+            // Separate rows keep long phrases from touching adjacent options.
+            spawnX = Math.max(12, Math.min(width - cardWidth - 12, spawnX));
+            return {
+                text: item.en,
+                x: spawnX,
+                y: -worldY - 350 - i * 72,
+                w: cardWidth, h: 40,
+                isCorrect: item.en === correctItem.en,
+                hit: false,
+                alpha: 0,
+                scale: 0.5,
+                // 駐留時間約 6 秒
+                lifeTimer: p >= 0.8 ? 420 : 360 
+            };
+        });
+        ctx.restore();
+    }
+
+    function update(now = performance.now()) {
+        const dt = lastUpdateTime === null ? 0 : Math.max(0, (now - lastUpdateTime) / 1000);
+        lastUpdateTime = now;
+        updateCold(dt);
+        if (isFalling) {
+            player.fallSpeed += 0.8;
+            player.y += player.fallSpeed;
+            if (player.y > height + 100) endGame(false);
+            return;
+        }
+
+        const frameStep = Math.min(dt, 0.05) * 60;
+        const inputX = activeTouchId !== null ? touchDirection.x
+            : Number(!!(keys['ArrowRight'] || keys['d'])) - Number(!!(keys['ArrowLeft'] || keys['a']));
+        const inputY = activeTouchId !== null ? touchDirection.y
+            : Number(!!(keys['ArrowUp'] || keys['w'])) - Number(!!(keys['ArrowDown'] || keys['s']));
+        const smoothing = 1 - Math.exp(-Math.min(dt, 0.05) * 24);
+        movement.x += (inputX - movement.x) * smoothing;
+        movement.y += (inputY - movement.y) * smoothing;
+        const previousWorldY = worldY;
+        worldY = Math.max(0, worldY + movement.y * player.climbSpeed * frameStep);
+        const scrollDelta = worldY - previousWorldY;
+        const p = score / totalQuestions;
+
+        if (Math.abs(movement.x) > 0.01) player.facing = movement.x < 0 ? 'left' : 'right';
+        player.x += movement.x * player.sideSpeed * frameStep;
+        constrainPlayerToBuilding();
+
+        updateSupplies(dt);
+
+        clouds.forEach(c => {
+            c.y += scrollDelta;
+            if (c.y > height) { c.y = -100; c.x = Math.random() * width; }
+            if (c.y < -100) { c.y = height; c.x = Math.random() * width; }
+        });
+
+        if (globalThrowCooldown > 0) globalThrowCooldown--;
+
+        if (p < 0.8) {
+            windowEntities.forEach(win => {
+                const screenY = win.y + worldY;
+                if (screenY > -300 && screenY < height + 300) {
+                    if (globalThrowCooldown <= 0) win.cooldown--;
+                    
+                    if (win.cooldown <= 0) {
+                        if (!win.isOpen) { 
+                            win.isOpen = true; 
+                            win.stateTimer = 40; 
+                        }
+                        else if (!win.personVisible && win.stateTimer <= 0) { 
+                            win.personVisible = true; 
+                            win.stateTimer = 60; 
+                        }
+                        else if (win.personVisible && win.stateTimer <= 0) {
+                            obstacles.push({
+                                x: win.x + 30, y: screenY + 40, 
+                                vx: (Math.random() - 0.5) * 8, vy: 6 + Math.random() * 3,
+                                type: p >= 0.4
+                                    ? fruitTypes[Math.floor(Math.random() * fruitTypes.length)]
+                                    : ['📦', '🪴', '🗑️', '🍎', '🧴'][Math.floor(Math.random()*5)]
+                            });
+                            win.personVisible = false; 
+                            win.isOpen = false;
+                            win.cooldown = p >= 0.4 ? 120 + Math.random() * 180 : 300 + Math.random() * 400;
+                            globalThrowCooldown = p >= 0.4 ? 150 : 300;
+                        }
+                    }
+                    if (win.stateTimer > 0) win.stateTimer--;
+                    if (win.personVisible) win.personScale = 0.95 + Math.sin(Date.now() / 80) * 0.05;
+                }
+                if (screenY > height + 500) { 
+                    win.y -= 25000; 
+                    win.isOpen = false; 
+                    win.personVisible = false; 
+                    win.hasBar = Math.random() < 0.35; 
+                }
+            });
+        }
+
+        const moving = Math.abs(movement.x) > 0.01 || Math.abs(movement.y) > 0.01;
+        player.visualOffsetX = moving ? Math.sin(now / 80) * 4 : 0;
+        constrainPlayerToBuilding();
+
+        const activeWord = floatingWords.find(w => !w.hit && w.lifeTimer > -10);
+        const isWordPassed = activeWord && (activeWord.y + worldY > height + 20);
+
+        if (!activeWord || isWordPassed) {
+            if (!isFalling && isGameRunning) {
+                floatingWords = []; 
+                nextQuestion();
+            }
+        }
+
+        for (let i = floatingWords.length - 1; i >= 0; i--) {
+            const word = floatingWords[i];
+            const screenY = word.y + worldY;
+            if (screenY > 0 && word.alpha < 1 && word.lifeTimer > 0) {
+                word.alpha += 0.1;
+                word.scale = Math.min(1, word.scale + 0.05);
+            }
+            if (word.alpha >= 1) word.lifeTimer--;
+            if (word.lifeTimer <= 0) {
+                word.alpha -= 0.08;
+                if (word.alpha <= 0) { floatingWords.splice(i, 1); continue; }
+            }
+            if (!word.hit && word.alpha > 0.5 && playerTouchesWord(word, screenY)) {
+                
+                word.hit = true;
+                if (word.isCorrect) {
+                    score++; updateUI(); floatingWords = []; 
+                    if (score >= totalQuestions) setTimeout(() => endGame(true), 500);
+                    else nextQuestion();
+                    break;
+                } else {
+                    word.error = true;
+                    if (p >= 0.8) { lives--; updateUI(); if (lives <= 0) isFalling = true; }
+                    const touchedOptions = floatingWords;
+                    setTimeout(() => {
+                        if (floatingWords === touchedOptions) floatingWords = [];
+                    }, 200);
+                }
+            }
+        }
+
+        obstacles.forEach((ob, i) => {
+            const prevY = ob.y;
+            ob.x += ob.vx; ob.y += ob.vy;
+            ob.y += scrollDelta;
+
+            let blocked = false;
+            windowEntities.forEach(win => {
+                if (win.hasBar) {
+                    const sy = win.y + worldY;
+                    const barY = sy + win.h + 8;
+                    const barXStart = win.x - 20;
+                    const barXEnd = win.x + win.w + 20;
+                    if (ob.x >= barXStart && ob.x <= barXEnd && prevY <= barY && ob.y >= barY) blocked = true;
+                }
+            });
+
+            if (blocked) { obstacles.splice(i, 1); return; }
+            if (ob.y > player.y && ob.y < player.y + player.h &&
+                ob.x > player.x && ob.x < player.x + player.w) {
+                lives--; obstacles.splice(i, 1); updateUI();
+                if (lives <= 0) isFalling = true;
+            }
+            if (ob.y > height + 200 || ob.x < -200 || ob.x > width + 200) obstacles.splice(i, 1);
+        });
+    }
+
+    function updateSupplies(dt) {
+        supplyStars.forEach(star => { star.remaining -= dt; });
+        supplySeconds += dt;
+        if (supplySeconds >= 10) {
+            supplySeconds %= 10;
+            const bounds = getPlayerHorizontalBounds();
+            const size = 36;
+            const minX = Math.max(8, bounds.min + player.w / 2 - size / 2);
+            const maxX = Math.min(width - size - 8, bounds.max + player.w / 2 - size / 2);
+            const minY = Math.min(150, height * 0.25);
+            const maxY = Math.max(minY, player.y - size - 20);
+            supplyStars.push({
+                x: minX + Math.random() * Math.max(0, maxX - minX),
+                y: minY + Math.random() * (maxY - minY) - worldY,
+                w: size, h: size, scale: 1, remaining: 10
+            });
+        }
+        supplyStars = supplyStars.filter(star => {
+            const screenY = star.y + worldY;
+            if (star.remaining <= 0 || screenY > height + star.h) return false;
+            if (playerTouchesWord(star, screenY)) {
+                lives = Math.min(4, lives + 1);
+                updateUI();
+                return false;
+            }
+            return true;
+        });
+    }
+
+    function playerTouchesWord(word, screenY) {
+        // Use the visible, scaled card and the sprite's opaque pixels.
+        const scale = word.scale;
+        const left = word.x + word.w * (1 - scale) / 2 + 1;
+        const top = screenY + word.h * (1 - scale) / 2 + 1;
+        const right = left + word.w * scale - 2;
+        const bottom = top + word.h * scale - 2;
+        const radius = Math.max(0, 12 * scale - 1);
+        const upsideDown = !isFrozen && (lives === 1 || isFalling);
+        const mask = spriteMasks[upsideDown ? 'role02-brown.png' : 'role01-brown.png'];
+        const sprite = upsideDown ? assets.role2 : assets.player;
+        if (!sprite.complete || !sprite.naturalWidth) return false;
+        const originX = player.x + player.visualOffsetX;
+        for (let y = 0; y < mask.length; y++) {
+            const py = player.y + (y + 0.5) * player.h / 100;
+            if (py < top || py > bottom) continue;
+            const row = mask[y];
+            for (let run = 0; run < row.length; run += 2) {
+                for (let x = row[run]; x < row[run + 1]; x++) {
+                    const localX = player.facing === 'left' ? 99 - x : x;
+                    const px = originX + (localX + 0.5) * player.w / 100;
+                    if (px < left || px > right) continue;
+                    const nearestX = Math.max(left + radius, Math.min(right - radius, px));
+                    const nearestY = Math.max(top + radius, Math.min(bottom - radius, py));
+                    if ((px - nearestX) ** 2 + (py - nearestY) ** 2 <= radius ** 2) return true;
+                }
+            }
+        }
+        return false;
+    }
+
+    function updateCold(dt) {
+        const p = score / totalQuestions;
+        if (p < 0.4) return;
+        snowflakes.forEach(flake => {
+            flake.x += flake.drift * dt;
+            flake.y += flake.speed * dt;
+            if (flake.y > height + 10) { flake.y = -10; flake.x = Math.random() * width; }
+            if (flake.x > width + 10) flake.x = -10;
+        });
+        weatherStatusEl.hidden = false;
+        if (isFrozen || isFalling) return;
+        if (p >= 0.7 && !coldEscaped) {
+            coldEscaped = true;
+            weatherStatusEl.textContent = '❄️ 已達 70%！脫離冰凍危險';
+            weatherStatusEl.style.color = '#a7f3d0';
+        }
+        if (coldEscaped) {
+            frostAmount = Math.max(0, frostAmount - dt / 3);
+            return;
+        }
+        if (!coldStarted) {
+            coldStarted = true;
+            globalThrowCooldown = Math.min(globalThrowCooldown, 60);
+            windowEntities.forEach(win => {
+                win.cooldown = Math.min(win.cooldown, 60 + Math.random() * 120);
+            });
+        }
+        else {
+            coldSeconds = Math.min(freezeDelay, coldSeconds + dt);
+            if (freezeDelay - coldSeconds < 1e-9) coldSeconds = freezeDelay;
+        }
+        frostAmount = coldSeconds / freezeDelay;
+        weatherStatusEl.textContent = `❄️ ${Math.ceil(freezeDelay - coldSeconds)} 秒內爬到 70%｜結冰 ${Math.floor(frostAmount * 100)}%`;
+        weatherStatusEl.style.color = freezeDelay - coldSeconds <= 10 ? '#fda4af' : '#e0f2fe';
+        if (coldSeconds >= freezeDelay) {
+            isFrozen = true;
+            isFalling = true;
+            player.visualOffsetX = 0;
+            player.fallSpeed = 2;
+            handleTouchEnd();
+            weatherStatusEl.textContent = '🧊 全身凍結，失去抓握！';
+        }
+    }
+
+    function drawBodyFrost(sprite) {
+        if (frostAmount <= 0) return;
+        const ice = frostCtx;
+        const size = frostCanvas.width;
+        ice.clearRect(0, 0, size, size);
+        ice.save();
+        // An uneven, feathered freezing front advances from the feet to the head.
+        const front = size * (0.94 - frostAmount * 0.94);
+        const gradient = ice.createLinearGradient(0, front - 8, 0, size);
+        gradient.addColorStop(0, 'rgba(190,235,255,0)');
+        gradient.addColorStop(0.15, 'rgba(200,240,255,0.65)');
+        gradient.addColorStop(1, 'rgba(225,248,255,0.88)');
+        ice.fillStyle = gradient;
+        ice.beginPath();
+        ice.moveTo(0, front);
+        for (let x = 0; x <= size; x += 4) {
+            ice.lineTo(x, front + Math.sin(x * 0.31) * 3 + Math.cos(x * 0.73) * 2);
+        }
+        ice.lineTo(size, size); ice.lineTo(0, size); ice.closePath();
+        ice.fill(); ice.clip();
+        frostCrystals.forEach(crystal => {
+            ice.save(); ice.translate(crystal.x, crystal.y); ice.rotate(crystal.angle);
+            ice.strokeStyle = 'rgba(255,255,255,0.8)'; ice.lineWidth = 0.7;
+            ice.beginPath();
+            for (let branch = 0; branch < 3; branch++) {
+                ice.moveTo(-crystal.size, 0); ice.lineTo(crystal.size, 0);
+                ice.moveTo(crystal.size * 0.5, 0); ice.lineTo(crystal.size * 0.2, -2);
+                ice.moveTo(-crystal.size * 0.5, 0); ice.lineTo(-crystal.size * 0.2, 2);
+                ice.rotate(Math.PI / 3);
+            }
+            ice.stroke(); ice.restore();
+        });
+        // Thin fractures and reflected light give the ice depth.
+        for (let i = 0; i < 7; i++) {
+            const x = 20 + i * 21;
+            ice.strokeStyle = 'rgba(58,120,158,0.45)'; ice.lineWidth = 1.2;
+            ice.beginPath(); ice.moveTo(x, size);
+            ice.lineTo(x - 7, 120); ice.lineTo(x + 5, 100);
+            ice.lineTo(x - 3, 65); ice.lineTo(x + 8, 25); ice.stroke();
+            ice.strokeStyle = 'rgba(255,255,255,0.7)'; ice.lineWidth = 0.5; ice.stroke();
+        }
+        ice.restore();
+        // Mask to the character's alpha so ice follows the body, never a rectangle.
+        ice.globalCompositeOperation = 'destination-in';
+        if (sprite) ice.drawImage(sprite, 0, 0, size, size);
+        else {
+            ice.font = '96px Arial'; ice.textAlign = 'center'; ice.textBaseline = 'middle';
+            ice.fillText('🧗', size / 2, size / 2 + 16);
+        }
+        ice.globalCompositeOperation = 'source-over';
+        ctx.drawImage(frostCanvas, player.x, player.y, player.w, player.h);
+    }
+
+    function drawTaipei101() {
+        const p = score / totalQuestions;
+        const centerX = width / 2;
+        let skyTop, skyBottom, buildingColor, structureColor;
+
+        if (p < 0.7) { skyTop = "#ffffff"; skyBottom = "#dbeafe"; buildingColor = "#5eead4"; structureColor = "#2dd4bf"; }
+        else if (p < 0.8) { skyTop = "#eff6ff"; skyBottom = "#3b82f6"; buildingColor = "#2dd4bf"; structureColor = "#0d9488"; }
+        else { skyTop = "#1d4ed8"; skyBottom = "#1e3a8a"; buildingColor = "#1e293b"; structureColor = "#94a3b8"; }
+
+        const grad = ctx.createLinearGradient(0, 0, 0, height);
+        grad.addColorStop(0, skyTop);
+        grad.addColorStop(1, skyBottom);
+        ctx.fillStyle = grad;
+        ctx.fillRect(0, 0, width, height);
+
+        if (p >= 0.7 && p < 0.8) {
+            ctx.save(); ctx.shadowBlur = 40; ctx.shadowColor = "rgba(253, 224, 71, 0.8)";
+            ctx.fillStyle = "#fde047"; ctx.beginPath(); ctx.arc(80, 80, 40, 0, Math.PI * 2); ctx.fill(); ctx.restore();
+        }
+
+        const sectionH = 160;
+        const offset = worldY % sectionH;
+
+        if (p < 0.8) {
+            ctx.fillStyle = p >= 0.7 ? "#2dd4bf" : buildingColor;
+            if (p < 0.7) {
+                ctx.fillRect(centerX - 120, 0, 240, height);
+                for (let i = -2; i < Math.ceil(height/sectionH) + 2; i++) {
+                    const sy = i * sectionH + offset;
+                    ctx.strokeStyle = structureColor; ctx.lineWidth = 3; ctx.beginPath();
+                    ctx.moveTo(centerX - 100, sy + sectionH); ctx.lineTo(centerX + 100, sy + sectionH);
+                    ctx.lineTo(centerX + 125, sy + 30); ctx.lineTo(centerX - 125, sy + 30); ctx.closePath(); ctx.stroke();
+                }
+            } else {
+                ctx.fillRect(centerX - 80, 0, 160, height);
+                const topTierH = 40;
+                for (let i = -2; i < Math.ceil(height/topTierH) + 2; i++) {
+                    const sy = i * topTierH + (worldY % topTierH);
+                    ctx.strokeStyle = structureColor; ctx.lineWidth = 2; ctx.beginPath();
+                    ctx.moveTo(centerX - 60, sy + topTierH); ctx.lineTo(centerX + 60, sy + topTierH);
+                    ctx.lineTo(centerX + 70, sy + 5); ctx.lineTo(centerX - 70, sy + 5); ctx.closePath(); ctx.stroke();
+                }
+            }
+        } else {
+            ctx.fillStyle = "#475569"; ctx.fillRect(centerX - 10, 0, 20, height);
+            ctx.strokeStyle = "#94a3b8"; ctx.lineWidth = 2;
+            for(let j=0; j<height; j+=30) {
+                const sy = j + (worldY % 30);
+                ctx.beginPath(); ctx.moveTo(centerX - 15, sy); ctx.lineTo(centerX + 15, sy); ctx.stroke();
+            }
+            if (p >= 0.95) { ctx.fillStyle = "#fbbf24"; ctx.beginPath(); ctx.arc(centerX, 150, 40, 0, Math.PI*2); ctx.fill(); }
+        }
+    }
+
+    function draw() {
+        ctx.clearRect(0, 0, width, height);
+        drawTaipei101();
+
+        ctx.fillStyle = "rgba(255,255,255,0.6)";
+        clouds.forEach(c => {
+            ctx.beginPath(); ctx.arc(c.x, c.y, 45, 0, Math.PI*2); ctx.arc(c.x + 35, c.y - 15, 30, 0, Math.PI*2); ctx.fill();
+        });
+
+        if (score / totalQuestions < 0.8) {
+            windowEntities.forEach(win => {
+                const sy = win.y + worldY;
+                if (sy < -150 || sy > height + 150) return;
+                ctx.fillStyle = win.isOpen ? "#020617" : "#1e293b";
+                ctx.fillRect(win.x, sy, win.w, win.h);
+                ctx.strokeStyle = "rgba(255,255,255,0.3)"; ctx.lineWidth = 2;
+                ctx.strokeRect(win.x, sy, win.w, win.h);
+                if (win.hasBar) {
+                    ctx.fillStyle = "#334155"; ctx.fillRect(win.x - 20, sy + win.h + 5, win.w + 40, 12);
+                    ctx.strokeStyle = "#94a3b8"; ctx.lineWidth = 2; ctx.strokeRect(win.x - 20, sy + win.h + 5, win.w + 40, 12);
+                    ctx.fillStyle = "rgba(255,255,255,0.15)"; ctx.fillRect(win.x - 20, sy + win.h + 7, win.w + 40, 4);
+                }
+                if (win.isOpen && win.personVisible) {
+                    ctx.save(); ctx.translate(win.x + win.w/2, sy + 40); ctx.scale(win.personScale, win.personScale);
+                    ctx.fillStyle = "#d8b4fe"; ctx.beginPath(); ctx.arc(0, -18, 20, 0, Math.PI * 2); ctx.fill(); 
+                    ctx.beginPath(); ctx.ellipse(0, 22, 28, 30, 0, 0, Math.PI * 2); ctx.fill(); ctx.restore();
+                }
+            });
+        }
+
+        floatingWords.forEach(word => {
+            const sy = word.y + worldY;
+            if (word.hit && word.isCorrect) return;
+            if (sy < -150 || sy > height + 150) return;
+            if (word.alpha > 0) {
+                ctx.save(); ctx.globalAlpha = word.alpha;
+                ctx.translate(word.x + word.w/2, sy + word.h/2); ctx.scale(word.scale, word.scale);
+                ctx.translate(-(word.x + word.w/2), -(sy + word.h/2));
+                if (word.error) ctx.fillStyle = "#f43f5e";
+                else ctx.fillStyle = "white";
+                roundRect(ctx, word.x, sy, word.w, word.h, 12, true, true);
+                if (word.error) ctx.fillStyle = "white";
+                else ctx.fillStyle = "#0f766e";
+                ctx.font = "bold 14px 'Microsoft JhengHei'"; ctx.textAlign = "center";
+                ctx.fillText(word.text, word.x + word.w/2, sy + 25);
+                ctx.restore();
+            }
+        });
+
+        supplyStars.forEach(star => {
+            ctx.save();
+            ctx.font = '32px Arial';
+            ctx.textAlign = 'center';
+            ctx.textBaseline = 'middle';
+            ctx.shadowColor = '#facc15';
+            ctx.shadowBlur = 12;
+            ctx.fillText('⭐', star.x + star.w / 2, star.y + worldY + star.h / 2);
+            ctx.restore();
+        });
+
+        obstacles.forEach(ob => { ctx.font = "35px Arial"; ctx.fillText(ob.type, ob.x, ob.y); });
+
+        ctx.save();
+        ctx.translate(player.visualOffsetX, 0);
+        const showUpsideDown = !isFrozen && (lives === 1 || isFalling);
+        if (player.facing === 'left') {
+            ctx.translate(player.x * 2 + player.w, 0);
+            ctx.scale(-1, 1);
+        }
+        let playerSprite = null;
+        if (showUpsideDown && assets.role2.complete && assets.role2.src.includes("role02")) {
+            playerSprite = assets.role2;
+            ctx.drawImage(assets.role2, player.x, player.y, player.w, player.h);
+        } else if (!showUpsideDown && assets.player.complete && assets.player.src.includes("role01")) {
+            playerSprite = assets.player;
+            ctx.drawImage(assets.player, player.x, player.y, player.w, player.h);
+        } else {
+            ctx.save();
+            ctx.translate(player.x + player.w/2, player.y + player.h/2);
+            if (showUpsideDown) ctx.rotate(Math.PI); 
+            ctx.font = "60px Arial";
+            ctx.textAlign = "center"; ctx.textBaseline = "middle";
+            ctx.fillText("🧗", 0, 10);
+            ctx.restore();
+        }
+        drawBodyFrost(playerSprite);
+        ctx.restore();
+
+        if (score / totalQuestions >= 0.4) {
+            ctx.save();
+            ctx.fillStyle = 'rgba(219, 234, 254, 0.18)';
+            ctx.fillRect(0, 0, width, height);
+            ctx.fillStyle = 'rgba(255, 255, 255, 0.9)';
+            snowflakes.forEach(flake => {
+                ctx.beginPath();
+                ctx.arc(flake.x, flake.y, flake.radius, 0, Math.PI * 2);
+                ctx.fill();
+            });
+            ctx.restore();
+        }
+
+        if (isGameRunning) animationId = requestAnimationFrame(now => { update(now); draw(); });
+    }
+
+    function roundRect(ctx, x, y, width, height, radius, fill, stroke) {
+        ctx.beginPath(); ctx.moveTo(x + radius, y); ctx.lineTo(x + width - radius, y);
+        ctx.quadraticCurveTo(x + width, y, x + width, y + radius); ctx.lineTo(x + width, y + height - radius);
+        ctx.quadraticCurveTo(x + width, y + height, x + width - radius, y + height); ctx.lineTo(x + radius, y + height);
+        ctx.quadraticCurveTo(x, y + height, x, y + height - radius); ctx.lineTo(x, y + radius);
+        ctx.quadraticCurveTo(x, y, x + radius, y); ctx.closePath();
+        if (fill) ctx.fill(); if (stroke) ctx.stroke();
+    }
+
+    function endGame(victory) {
+        isGameRunning = false; cancelAnimationFrame(animationId); overlay.style.display = 'flex';
+        if (victory) overlay.innerHTML = `<h1 class="text-5xl font-black mb-4 text-blue-600">攻頂英雄！</h1><p class="mb-6 text-xl text-gray-600">你成功征服了台北 101，所有單字都難不倒你！</p><button id="retry-btn" class="bg-blue-600 hover:bg-blue-700 text-white font-bold py-3 px-10 rounded-full text-xl shadow-xl">再戰一次</button>`;
+        else overlay.innerHTML = `<h1 class="text-5xl font-black mb-4 text-rose-500">挑戰失敗</h1><p class="mb-6 text-xl text-gray-600">你不幸失足墜落...別灰心，多練習幾次一定能登頂！</p><button id="retry-btn" class="bg-blue-600 hover:bg-blue-700 text-white font-bold py-3 px-10 rounded-full text-xl shadow-xl">重新嘗試</button>`;
+        document.getElementById('retry-btn').onclick = () => location.reload();
+        if (isFrozen) {
+            overlay.querySelector('h1').textContent = '🧊 被凍結了！';
+            overlay.querySelector('p').textContent = '未能在 70 秒內從 40% 爬到 70%，寒冰蔓延全身，失去抓握後墜落了！';
+        }
+    }
+
+    startBtn.addEventListener('click', () => { overlay.style.display = 'none'; isGameRunning = true; resetGame(); draw(); });
+    window.addEventListener('resize', resize);
+    window.addEventListener('blur', () => { lastUpdateTime = null; handleTouchEnd(); });
+    document.addEventListener('visibilitychange', () => {
+        lastUpdateTime = null;
+        handleTouchEnd();
+    });
+    init();
+</script>
+</body>
+</html>
